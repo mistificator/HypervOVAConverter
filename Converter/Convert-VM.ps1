@@ -12,7 +12,9 @@ Param (
 [Parameter(ParameterSetName="VHD")]
 [byte]$CPU = 1,
 [Parameter(ParameterSetName="VHD")]
-[int]$Memory = 1024
+[int]$Memory = 1024,
+[Parameter(ParameterSetName="HVVM")]
+[string]$TmpCopyPath
 )
 
 #region Consts
@@ -33,7 +35,7 @@ scsi0.present = "TRUE"
 '@
 #endregion
 
-#Проверяем наличие папки для целевых файлов
+#Check dest path
 if (-not (Test-Path -Path $OVAPath -PathType Container)) {
     New-Item -ItemType Directory -Path $OVAPath -Force
 }
@@ -42,7 +44,7 @@ if (-not (Test-Path -Path $OVAPath -PathType Container)) {
 Switch ($PSCmdlet.ParameterSetName)
 {
     "HVVM" {
-        #Получаем конфиг экспортируемой ВМ
+        #Get exported VM config
         $vmconfig = Join-Path -Path $HyperVVMPath -ChildPath $vmcfgfolder
 
         if (Test-Path $vmconfig -PathType Container) {
@@ -50,20 +52,22 @@ Switch ($PSCmdlet.ParameterSetName)
 
             if ($vmcfg.Count -eq 1) {
         
-                $VM = (Compare-VM -Path $(Join-Path -Path $vmconfig -ChildPath $vmcfg.Name) -GenerateNewId -Copy).VM
+                Write-Host -ForegroundColor Blue "Selected configuration is `"$(Join-Path -Path $vmconfig -ChildPath $vmcfg.Name)`""
+                $VM = (Compare-VM -Path $(Join-Path -Path $vmconfig -ChildPath $vmcfg.Name) -GenerateNewId -Copy $TmpCopyPath).VM
             }
             else {
-                Write-Host -ForegroundColor Red "Ошибка: $vmcfgpath не содержит файлов конфигурации виртуальной машины или их более одной"
+                Write-Host -ForegroundColor Red "Error: `"$vmcfgfolder`" does not contain configuration file or there are multiple configurations"
                 Exit
             }
 
         }
         else {
-            Write-Host -ForegroundColor Red "Ошибка: $HyperVVMPath не содержит файлов конфигурации виртуальной машины"
+            Write-Host -ForegroundColor Red "Error: `"$HyperVVMPath`" does not contain configuration file"
             Exit
         }
 
-        #Собираем конфиг VMX
+        #Building VMX
+        Write-Host -ForegroundColor Blue "Building VMX configuration `"$($VM.VMName)`""
         $config += "displayName = `"$($VM.VMName)`"`r`n"
         $config += "numvcpus = `"$($VM.ProcessorCount)`"`r`n"
         if ($vm.DynamicMemoryEnabled) {
@@ -97,8 +101,9 @@ Switch ($PSCmdlet.ParameterSetName)
             }
     
             $outname = Split-Path -Path $outfullpath -Leaf
-
             $outvmdkpath = Join-Path -Path $OVAPath -ChildPath $outname
+
+            Write-Host -ForegroundColor Blue "Converting virtual drive `"$outvmdkpath`""
 
             $arglist = "if=`"$vhdfullpath`" of=`"$outvmdkpath`" ot=VMDK_S vmdktype=SCSI"
 
@@ -130,7 +135,7 @@ Switch ($PSCmdlet.ParameterSetName)
                 $outfullpath = $VHDPath.TrimEnd("vhd") + "vmdk"            
             }
 
-            #собираем конфиг
+            #Building config
             $config += "displayName = `"$($VMName)`"`r`n"
             $config += "numvcpus = `"$($CPU)`"`r`n"
             $config += "memSize = `"$($Memory)`"`r`n"
@@ -144,8 +149,9 @@ Switch ($PSCmdlet.ParameterSetName)
             $path = Join-Path -Path $OVAPath -ChildPath $($VMName + ".vmx")
 
             $outname = Split-Path -Path $outfullpath -Leaf
-
             $outvmdkpath = Join-Path -Path $OVAPath -ChildPath $outname
+
+            Write-Host -ForegroundColor Blue "Converting virtual drive `"$outvmdkpath`""
 
             $arglist = "if=`"$VHDPath`" of=`"$outvmdkpath`" ot=VMDK_S vmdktype=SCSI"
 
@@ -153,21 +159,23 @@ Switch ($PSCmdlet.ParameterSetName)
         }
         else
         {
-            Write-Host -ForegroundColor Red "Ошибка: $VHDPath не является файлом"
+            Write-Host -ForegroundColor Red "Error: `"$VHDPath`" is not a file"
             Exit
         }
     }
 
 }
 
-#сохраняем конфиг
+#Saving config
 Set-Content -Path $path -Value $config
 
-#Заворачиваем ВМ в OVA
+#Converting VMX to OVA
 $ovafilepath = $path.TrimEnd("vmx") + "ova"
 
-$arglist = "$path $ovafilepath"
+Write-Host -ForegroundColor Blue "Building OVA virtual machine `"$ovafilepath`" from VMX"
+
+$arglist = "`"$path`" `"$ovafilepath`""
 
 Start-Process -FilePath $ovftoolfullpath -ArgumentList $arglist -Wait
 
-Write-Host -ForegroundColor Green "OVA-файл находится тут: $ovafilepath"
+Write-Host -ForegroundColor Green "OVA virtual machine is ready: `"$ovafilepath`""
